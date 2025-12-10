@@ -158,6 +158,19 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
             try:
                 with session.get(self.next_url) as response:
                     if response.status_code != 200:
+                        # Don't retry on client errors (4xx)
+                        # - these indicate bad requests
+                        if 400 <= response.status_code < 500:
+                            self.log.error(
+                                f"Client error {response.status_code}: "
+                                f"{response.text[:500]}"
+                            )
+                            raise ValueError(
+                                "Request failed with client error "
+                                f"{response.status_code}. "
+                                "Check your query parameters."
+                            )
+                        # Retry on server errors (5xx) and other issues
                         self.log.warning(
                             f"Status code {response.status_code}, retrying.."
                         )
