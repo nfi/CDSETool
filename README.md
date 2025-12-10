@@ -13,12 +13,11 @@ from cdsetool.monitor import StatusMonitor
 from datetime import date
 
 features = query_features(
-    "Sentinel1",
+    "SENTINEL-1",
     {
-        "startDate": "2020-12-20",
-        "completionDate": date(2020, 12, 25),
+        "startDateGe": "2020-12-20",
+        "completionDateLe": date(2020, 12, 25),
         "processingLevel": "LEVEL1",
-        "sensorMode": "IW",
         "productType": "IW_GRDH_1S",
         "geometry": shape_to_wkt("path/to/shapefile.shp"),
     },
@@ -40,9 +39,9 @@ list(
 Or use the CLI:
 
 ```bash
-cdsetool query search Sentinel2 --search-term startDate=2020-01-01 --search-term completionDate=2020-01-10 --search-term processingLevel=S2MSI2A --search-term box="4","51","4.5","52"
+cdsetool query search SENTINEL-2 --search-term startDateGe=2020-01-01 --search-term completionDateLe=2020-01-10 --search-term productType=S2MSI2A
 
-cdsetool download Sentinel2 PATH/TO/DIR --concurrency 4 --search-term startDate=2020-01-01 --search-term completionDate=2020-01-10 --search-term processingLevel=S2MSI2A --search-term box="4","51","4.5","52"
+cdsetool download SENTINEL-2 PATH/TO/DIR --concurrency 4 --search-term startDateGe=2020-01-01 --search-term completionDateLe=2020-01-10 --search-term productType=S2MSI2A
 ```
 
 ## Table of Contents
@@ -51,7 +50,7 @@ cdsetool download Sentinel2 PATH/TO/DIR --concurrency 4 --search-term startDate=
   * [About CDSETool](#about-cdsetool)
   * [Quick Start](#quick-start)
   * [Table of Contents](#table-of-contents)
-  * [Installatson](#installation)
+  * [Installation](#installation)
   * [Usage](#usage)
     + [Querying features](#querying-features)
       - [Querying by shapes](#querying-by-shapes)
@@ -78,22 +77,24 @@ pip install cdsetool==0.2.13
 
 ### Querying features
 
-Querying is always done in batches, returning `len(results) <= maxRecords` records each time.
+Querying is always done in batches, returning `len(results) <= top` records each time.
 A local buffer is filled and gradually emptied as results are yielded. When the buffer is empty,
 more results will be requested and the process repeated until no more results are available, or
 the iterator is discarded.
 
+**Important**: The API has a pagination limit of 10,000 results per query. If your query returns more results, you'll need to narrow your search criteria (e.g., use smaller date ranges).
+
 Since downloading features is the most common use-case, `query_features` assumes that the query will run till the end.
-Because of this, the batch size is set to `2000`, which is the size limit set by CDSE.
+Because of this, the batch size is set to `1000`, which is the size limit set by CDSE.
 
 ```python
 from cdsetool.query import query_features
 
-collection = "Sentinel2"
+collection = "SENTINEL-2"
 search_terms = {
-    "maxRecords": "100", # batch size, between 1 and 2000 (default: 2000).
-    "startDate": "1999-01-01",
-    "processingLevel": "S2MSI1C"
+    "top": 100,  # batch size, between 1 and 1000 (default: 1000)
+    "startDateGe": "2024-01-01",
+    "productType": "S2MSI1C"
 }
 
 # wait for a single batch to finish, yield results immediately
@@ -111,17 +112,69 @@ featureB = next(iterator)
 # ...
 ```
 
-#### Querying by shapes
+#### Query Options
+
+**Product Format**
+
+Query results are returned directly from the Copernicus API. Each product has the following structure:
+
+```python
+product = {
+    "Id": "uuid-string",
+    "Name": "S2A_MSIL2A_20240110T105421_...",
+    "Collection": {"Name": "SENTINEL-2"},
+    "ContentDate": {"Start": "2024-01-10T10:54:21Z", "End": "..."},
+    "Online": True,
+    "ContentLength": 1043654649,
+    "GeoFootprint": {"type": "Polygon", "coordinates": [...]},
+    "Attributes": [
+        {"Name": "productType", "Value": "S2MSI2A"},
+        {"Name": "cloudCover", "Value": 5.2},
+        ...
+    ]
+}
+```
+
+**Expand Product Attributes**
+
+By default, query results do not include product attributes (productType, cloudCover, platform, instrument, etc.). To include product attributes, you need to request this from the server using the option `expand_attributes` and can then access the attributes using the function `get_product_attribute()`:
+
+```python
+from cdsetool.query import query_features, get_product_attribute
+
+features = query_features(
+    "SENTINEL-2",
+    {"startDateGe": "2024-01-01"},
+    options={"expand_attributes": True}
+)
+feature = features[0]
+
+# Access basic properties directly
+print(feature["Name"])  # Product name
+print(feature["Id"])    # Product UUID
+
+# Access attributes using helper function
+cloud_cover = get_product_attribute(feature, "cloudCover")
+product_type = get_product_attribute(feature, "productType")
+```
+
+#### Querying by geometry
 
 To query by shapes, you must first convert your shape to Well Known Text (WKT). The included
 `shape_to_wkt` can solve this.
 
+**Note**: The `box` parameter was only supported in the old OpenSearch API, use the `geometry` parameter with a polygon in WKT format instead:
+
 ```python
 from cdsetool.query import query_features, shape_to_wkt
 
+# Using shapefile
 geometry = shape_to_wkt("path/to/shape.shp")
+features = query_features("SENTINEL-3", {"geometry": geometry})
 
-features = query_features("Sentinel3", {"geometry": geometry})
+# Using WKT directly (bounding box as polygon)
+bbox_wkt = "POLYGON((4 51, 4 52, 4.5 52, 4.5 51, 4 51))"
+features = query_features("SENTINEL-2", {"geometry": bbox_wkt})
 ```
 
 #### Querying by lists of parameters
@@ -135,7 +188,7 @@ from cdsetool.query import query_features
 tile_ids = ["32TPT", "32UPU", "32UPU", "31RFL", "37XDA"]
 
 for tile_id in tile_ids:
-    features = query_features("Sentinel2", {"tileId": tile_id})
+    features = query_features("SENTINEL-2", {"tileId": tile_id})
     for feature in features:
         # do things with feature
 ```
@@ -144,6 +197,29 @@ for tile_id in tile_ids:
 
 Its quite common to query for features created before, after or between dates.
 
+Search terms support comparison operator suffixes:
+
+| Suffix | Meaning                    | Example              |
+|--------|----------------------------|----------------------|
+| (none) | equals (=)                 | `startDate`          |
+| `Gt`   | greater than (>)           | `startDateGt`        |
+| `Ge`   | greater than or equal (>=) | `startDateGe`        |
+| `Lt`   | less than (<)              | `completionDateLt`   |
+| `Le`   | less than or equal (<=)    | `completionDateLe`   |
+
+These suffixes can be applied to the date fields `startDate`, `completionDate`, and `published`. The same suffixes also work on numeric attributes like `cloudCover` and date-time attributes like `processingDate`.
+
+**Note**: In the old OpenSearch API, the 'cloudCover' parameter filtered on values less than or equal to the cloud cover, but now 'cloudCover' filters on the exact cloud cover value. Use the `cloudCoverLe` parameter to filter on less than or equal to the cloud over.
+
+Combine two suffixes on the same field to form an interval:
+
+| Interval notation | Suffixes to combine | Meaning                        |
+|-------------------|---------------------|--------------------------------|
+| [a, b]            | `Ge` + `Le`         | a <= value <= b (closed)       |
+| (a, b)            | `Gt` + `Lt`         | a < value < b  (open)          |
+| [a, b)            | `Ge` + `Lt`         | a <= value < b (half-open)     |
+| (a, b]            | `Gt` + `Le`         | a < value <= b (half-open)     |
+
 ```python
 from cdsetool.query import query_features
 from datetime import date, datetime
@@ -151,7 +227,7 @@ from datetime import date, datetime
 date_from = date(2020, 1, 1) # or datetime(2020, 1, 1, 23, 59, 59, 123456) or "2020-01-01" or "2020-01-01T23:59:59.123456Z"
 date_to = date(2020, 12, 31)
 
-features = query_features("Sentinel2", {"startDate": date_from, "completionDate": date_to})
+features = query_features("SENTINEL-2", {"startDateGe": date_from, "completionDateLe": date_to, "cloudCover": "[0, 30]"})
 ```
 
 #### Listing search terms
@@ -162,13 +238,13 @@ use the CLI:
 ```python
 from cdsetool.query import describe_collection
 
-search_terms = describe_collection("Sentinel2").keys()
+search_terms = describe_collection("SENTINEL-2").keys()
 print(search_terms)
 ```
 
 And the CLI:
 ```bash
-$ cdsetool query search-terms Sentinel2
+$ cdsetool query search-terms SENTINEL-2
 ```
 
 ### Downloading features
@@ -232,7 +308,7 @@ The downloaded feature ids are yielded, so its required to await the results.
 from cdsetool.query import query_features
 from cdsetool.download import download_features
 
-features = query_features("Sentinel2")
+features = query_features("SENTINEL-2", {"startDateGe": "2024-01-01", "completionDateLe": "2024-01-10"})
 
 download_path = "/path/to/download/folder"
 downloads = download_features(features, download_path, {"concurrency": 4})
@@ -253,7 +329,7 @@ Its possible to download features sequentially in a single thread if desired.
 from cdsetool.query import query_features
 from cdsetool.download import download_feature
 
-features = query_features("Sentinel2")
+features = query_features("SENTINEL-2", {"startDateGe": "2024-01-01", "completionDateLe": "2024-01-10"})
 
 download_path = "/path/to/download/folder"
 for feature in features:
@@ -271,7 +347,7 @@ It can be used in CDSETool:
     from cdsetool.query import query_features
     from cdsetool.download import download_features
 
-    features = query_features("Sentinel2")
+    features = query_features("SENTINEL-2", {"startDateGe": "2024-01-01", "completionDateLe": "2024-01-10"})
 
     download_path = "/path/to/download/folder"
     filter_pattern = "*TCI.jp2"
@@ -283,7 +359,7 @@ It can be used in CDSETool:
 
 - Or through the CLI:
     ```
-    cdsetool download Sentinel2 PATH/TO/DIR --filter-pattern *TCI.jp2 --concurrency 4 --search-term startDate=2020-01-01 --search-term completionDate=2020-01-10 --search-term processingLevel=S2MSI2A --search-term box="4","51","4.5","52"
+    cdsetool download SENTINEL-2 PATH/TO/DIR --filter-pattern *TCI.jp2 --concurrency 4 --search-term startDateGe=2024-01-01 --search-term completionDateLe=2024-01-10 --search-term productType=S2MSI2A
     ```
 
 ## Roadmap
