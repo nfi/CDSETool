@@ -71,6 +71,19 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
         # Option to expand Attributes for product metadata (default: True)
         self.expand_attributes = (options or {}).get("expand_attributes", True)
 
+        # Check for deprecated OpenSearch parameters
+        if "maxRecords" in search_terms:
+            self.log.warning(
+                "Parameter 'maxRecords' is deprecated (from OpenSearch API). "
+                "Use 'top' parameter instead for OData API."
+            )
+        if "page" in search_terms:
+            self.log.warning(
+                "Parameter 'page' is deprecated (from OpenSearch API). "
+                "OData uses automatic pagination with $skip/$top. "
+                "Remove 'page' parameter."
+            )
+
         self._top = search_terms.get("top", 1000)
         if self._top > 1000:
             self.log.warning("Maximum $top value is 1000, setting to 1000")
@@ -159,6 +172,13 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
 
                     if "@odata.count" in odata_response:
                         self.total_results = odata_response["@odata.count"]
+                    elif self._skip_count == 0:
+                        # First request should include count
+                        self.log.error(
+                            "Expected @odata.count in first response "
+                            "but it was not present. "
+                            "Total result count will be unknown."
+                        )
 
                     self._skip_count += len(products)
                     self.__set_next_url(odata_response)
