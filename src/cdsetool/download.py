@@ -1,5 +1,5 @@
 """
-Download features from a Copernicus Data Space Ecosystem OpenSearch API result
+Download products from a Copernicus Data Space Ecosystem OData API result
 
 Provides a function to download a single feature, a function to download all features
 in a result set, and a function to download specific files in a given feature using
@@ -124,39 +124,53 @@ def download_file(url: str, path: Path, options: Dict[str, Any]) -> bool:
     return False
 
 
-def download_feature(  # pylint: disable=too-many-return-statements
-    feature, path: str, options: Union[Dict[str, Any], None] = None
+def download_product(  # pylint: disable=too-many-return-statements
+    product: Dict[str, Any],
+    path: str,
+    options: Union[Dict[str, Any], None] = None,
 ) -> Union[str, None]:
     """
-    Download a single feature.
+    Download a single product.
 
-    Returns the feature title.
+    Args:
+        product: OData product dictionary with Id, Name, etc.
+        path: Output directory path
+        options: Download options. If 'filter_pattern' is specified,
+            'collection' must also be provided in options.
+
+    Returns the product name.
     """
     options = options or {}
     log = _get_logger(options)
     temp_dir_usr = _get_temp_dir(options)
-    title = feature.get("properties").get("title")
-    collection = feature.get("properties").get("collection")
+    title = product.get("Name")
+    product_id = product.get("Id")
     download_full = "filter_pattern" not in options
 
-    try:
-        manifest_filename = "" if download_full else MANIFEST_FILENAMES[collection]
-    except KeyError:
-        log.error(
-            f"No support for downloading individual files in {collection} products"
-        )
+    if not title or not product_id:
+        log.debug(f"Bad product ID ('{product_id}') or title ('{title}')")
         return None
 
-    # Prepare to download full product, or manifest file if filter_pattern is used
+    manifest_filename = ""
+    if not download_full:
+        collection = options.get("collection")
+        if not collection:
+            log.error("'collection' is required in options when using 'filter_pattern'")
+            return None
+        try:
+            manifest_filename = MANIFEST_FILENAMES[collection]
+        except KeyError:
+            log.error(
+                f"No support for downloading individual files in {collection} products"
+            )
+            return None
+
     filename = title + ".zip" if download_full else manifest_filename
     url = (
-        _get_feature_url(feature)
+        _get_product_url(product_id)
         if download_full
-        else _get_odata_url(feature["id"], title, filename)
+        else _get_odata_url(product_id, title, filename)
     )
-    if not url or not title:
-        log.debug(f"Bad URL ('{url}') or title ('{title}')")
-        return None
 
     result_path = os.path.join(path, filename if download_full else title)
     if not options.get("overwrite_existing", False) and os.path.exists(result_path):
@@ -180,7 +194,7 @@ def download_feature(  # pylint: disable=too-many-return-statements
             output_file = os.path.join(temp_product_path, file)
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             if not download_file(
-                _get_odata_url(feature["id"], title, str(file)),
+                _get_odata_url(product_id, title, str(file)),
                 Path(output_file),
                 options,
             ):
@@ -195,13 +209,17 @@ def download_feature(  # pylint: disable=too-many-return-statements
     return filename if download_full else title
 
 
-def download_features(
-    features: FeatureQuery, path: str, options: Union[Dict[str, Any], None] = None
+# Keep backward-compatible alias
+download_feature = download_product
+
+
+def download_products(
+    products: FeatureQuery, path: str, options: Union[Dict[str, Any], None] = None
 ) -> Generator[Union[str, None], None, None]:
     """
-    Generator function that downloads all features in a result set
+    Generator function that downloads all products in a result set
 
-    Feature IDs are yielded as they are downloaded
+    Product names are yielded as they are downloaded
     """
     options = options or {}
 
@@ -211,18 +229,25 @@ def download_features(
     options["monitor"] = _get_monitor(options)
     options["monitor"].start()
 
-    def _download_feature(feature) -> Union[str, None]:
-        return download_feature(feature, path, options)
+    options["collection"] = products.collection
+
+    def _download_product(product) -> Union[str, None]:
+        return download_product(product, path, options)
 
     yield from _concurrent_process(
-        _download_feature, features, options.get("concurrency", 1)
+        _download_product, products, options.get("concurrency", 1)
     )
 
     options["monitor"].stop()
 
 
-def _get_feature_url(feature) -> str:
-    return feature.get("properties").get("services").get("download").get("url")
+# Keep backward-compatible alias
+download_features = download_products
+
+
+def _get_product_url(product_id: str) -> str:
+    """Generate download URL for a product from its ID."""
+    return f"https://catalogue.dataspace.copernicus.eu/download/{product_id}"
 
 
 def _get_odata_url(product_id: str, product_name: str, href: str) -> str:
