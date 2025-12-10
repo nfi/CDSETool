@@ -1,16 +1,16 @@
 """
-Query the Copernicus Data Space Ecosystem OpenSearch API
+Query the Copernicus Data Space Ecosystem OData API
 
-https://documentation.dataspace.copernicus.eu/APIs/OpenSearch.html
+https://documentation.dataspace.copernicus.eu/APIs/OData.html
 """
 
 import json
-import re
+from dataclasses import dataclass
 from datetime import date, datetime
 from random import random
 from time import sleep
-from typing import Any, Dict, Union
-from xml.etree import ElementTree
+from typing import Any, Dict, List, Union
+from urllib.parse import quote
 
 import geopandas as gpd
 from requests.exceptions import ChunkedEncodingError
@@ -40,15 +40,20 @@ class _FeatureIterator:
             raise StopIteration from exc
 
 
-class FeatureQuery:
+class FeatureQuery:  # pylint: disable=too-many-instance-attributes
     """
     An iterator over the features matching the search terms
 
-    Queries the API in batches (default: 50) features, and returns them one by one.
+    Queries the API in batches (default: 1000), and returns them one by one.
     Queries the next batch when the current batch is exhausted.
+
+    Note: OData API has a hard limit of 10,000 results per query
+    due to $skip limitation.
     """
 
     total_results: int = -1
+    _skip_count: int = 0
+    _top: int = 1000
 
     def __init__(
         self,
@@ -60,12 +65,17 @@ class FeatureQuery:
         self.features = []
         self.proxies = proxies
         self.log = (options or {}).get("logger") or NoopLogger()
-        self.next_url = _query_url(
-            collection,
-            {**search_terms, "exactCount": "1"},
-            proxies=proxies,
-            validate_search_terms=(options or {}).get("validate_search_terms", True),
-        )
+        self.collection = collection
+        self.search_terms = search_terms
+
+        # Option to expand Attributes for product metadata (default: True)
+        self.expand_attributes = (options or {}).get("expand_attributes", True)
+
+        self._top = search_terms.get("top", 1000)
+        if self._top > 1000:
+            self.log.warning("Maximum $top value is 1000, setting to 1000")
+            self._top = 1000
+        self.next_url = self._build_query_url(include_count=True)
 
     def __iter__(self):
         return _FeatureIterator(self)
@@ -82,9 +92,50 @@ class FeatureQuery:
 
         return self.features[index]
 
+    def _build_query_url(self, include_count: bool = False) -> str:
+        """Build query URL with current skip offset"""
+        base_url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
+
+        filter_expr = _build_odata_filter(self.collection, self.search_terms)
+
+        params = [f"$filter={quote(filter_expr)}"]
+        params.append(f"$top={self._top}")
+
+        if self._skip_count > 0:
+            params.append(f"$skip={self._skip_count}")
+
+        if include_count:
+            params.append("$count=true")
+
+        # Optionally expand Attributes to get product metadata
+        # (productType, cloudCover, etc.)
+        if self.expand_attributes:
+            params.append("$expand=Attributes")
+
+        # Add ordering for consistent pagination
+        params.append("$orderby=ContentDate/Start%20asc")
+
+        return f"{base_url}?{'&'.join(params)}"
+
     def __fetch_features(self) -> None:
         if self.next_url is None:
             return
+
+        if self._skip_count >= 10000:
+            self.log.error(
+                "Reached maximum pagination limit (10,000 results). "
+                "Cannot fetch more results. Consider narrowing your search criteria "
+                "(e.g., smaller date ranges)."
+            )
+            self.next_url = None
+            return
+
+        if self._skip_count >= 9000:
+            self.log.warning(
+                f"Approaching pagination limit ({self._skip_count}/10,000 results). "
+                "Consider narrowing your search criteria."
+            )
+
         session = Credentials.make_session(
             None, False, Credentials.RETRIES, self.proxies
         )
@@ -99,27 +150,34 @@ class FeatureQuery:
                         )
                         sleep(60 * (1 + (random() / 4)))
                         continue
-                    res = response.json()
-                    self.features += res.get("features") or []
 
-                    total_results = res.get("properties", {}).get("totalResults")
-                    if total_results is not None:
-                        self.total_results = total_results
+                    odata_response = response.json()
 
-                    self.__set_next_url(res)
+                    products = odata_response.get("value", [])
+
+                    self.features += products
+
+                    if "@odata.count" in odata_response:
+                        self.total_results = odata_response["@odata.count"]
+
+                    self._skip_count += len(products)
+                    self.__set_next_url(odata_response)
                     return
             except (ChunkedEncodingError, ConnectionResetError, ProtocolError) as e:
                 self.log.warning(e)
                 continue
 
-    def __set_next_url(self, res) -> None:
-        links = res.get("properties", {}).get("links") or []
-        self.next_url = next(
-            (link for link in links if link.get("rel") == "next"), {}
-        ).get("href")
-
-        if self.next_url:
-            self.next_url = self.next_url.replace("exactCount=1", "exactCount=0")
+    def __set_next_url(self, odata_response: Dict) -> None:
+        """Set next URL from OData response"""
+        # Don't follow next link if top=0 (count-only mode)
+        if (
+            "@odata.nextLink" in odata_response
+            and self._skip_count < 10000
+            and self._top > 0
+        ):
+            self.next_url = self._build_query_url(include_count=False)
+        else:
+            self.next_url = None
 
 
 def query_features(
@@ -130,10 +188,24 @@ def query_features(
 ) -> FeatureQuery:
     """
     Returns an iterator over the features matching the search terms
+
+    Args:
+        collection: Collection name (e.g., "SENTINEL-2")
+        search_terms: Dictionary of search parameters
+        proxies: Optional proxy configuration
+        options: Optional settings:
+            - expand_attributes (bool): Include product attributes in response
+              (productType, cloudCover, platform, etc.). Default: True.
+              Set to False for faster queries if attributes aren't needed.
+
+    Note: The OData API has a pagination limit of 10,000 results per query.
+    If your query returns more results, consider narrowing the search criteria.
     """
-    return FeatureQuery(
-        collection, {"maxRecords": 2000, **search_terms}, proxies, options
-    )
+    # Set default top to 1000 (OData maximum per request)
+    if "top" not in search_terms:
+        search_terms = {"top": 1000, **search_terms}
+
+    return FeatureQuery(collection, search_terms, proxies, options)
 
 
 def shape_to_wkt(shape: str) -> str:
@@ -176,152 +248,214 @@ def describe_collection(
     collection: str, proxies: Union[Dict[str, str], None] = None
 ) -> Dict[str, Any]:
     """
-    Get a list of valid options for a given collection in key value pairs
+    Get a list of valid OData filter parameters for a given collection
+
+    Note: This is a simplified version that returns common parameters.
+    The OData API does not provide a schema description endpoint like OpenSearch did.
     """
-    content = _get_describe_doc(collection, proxies=proxies)
-    tree = ElementTree.fromstring(content)
-    parameter_node_parent = tree.find(
-        "{http://a9.com/-/spec/opensearch/1.1/}Url[@type='application/json']"
-    )
+    # Common parameters across all collections
+    common_params = {
+        "startDate": {
+            "title": "Start date for acquisition (ContentDate/Start gt)",
+            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
+            "example": "2024-01-01 or 2024-01-01T00:00:00Z",
+        },
+        "startDateBefore": {
+            "title": "Upper bound for start date (ContentDate/Start lt)",
+            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
+            "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+        },
+        "completionDate": {
+            "title": "End date for acquisition (ContentDate/End lt)",
+            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
+            "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+        },
+        "geometry": {
+            "title": "WKT geometry for spatial filtering",
+            "example": "POLYGON((lon1 lat1, lon2 lat2, ...))",
+        },
+        "productType": {
+            "title": "Product type (e.g., S2MSI1C, S2MSI2A, GRD, SLC)",
+        },
+        "orbitDirection": {
+            "title": "Orbit direction (ASCENDING or DESCENDING)",
+        },
+        "relativeOrbitNumber": {
+            "title": "Relative orbit number",
+        },
+    }
 
-    parameters = {}
-    if parameter_node_parent is None:
-        return parameters
-    for parameter_node in parameter_node_parent:
-        name = parameter_node.attrib.get("name")
-        pattern = parameter_node.attrib.get("pattern")
-        min_inclusive = parameter_node.attrib.get("minInclusive")
-        max_inclusive = parameter_node.attrib.get("maxInclusive")
-        title = parameter_node.attrib.get("title")
+    # Collection-specific parameters
+    collection_params = {
+        "SENTINEL-2": {
+            "cloudCover": {
+                "title": "Maximum cloud cover percentage (0-100)",
+                "maxInclusive": "100",
+                "minInclusive": "0",
+            },
+        },
+    }
 
-        if name:
-            parameters[name] = {
-                "pattern": pattern,
-                "minInclusive": min_inclusive,
-                "maxInclusive": max_inclusive,
-                "title": title,
-            }
+    params = common_params.copy()
+    if collection.upper() in collection_params:
+        params.update(collection_params[collection.upper()])
 
-    return parameters
+    return params
 
 
-def _query_url(
-    collection: str,
-    search_terms: Dict[str, Any],
-    proxies: Union[Dict[str, str], None],
-    validate_search_terms: bool,
-) -> str:
-    description = (
-        describe_collection(collection, proxies=proxies)
-        if validate_search_terms
-        else {}
-    )
-    query_list = []
+@dataclass(frozen=True)
+class DateFilterSpec:
+    """Specification for a date-based filter."""
+
+    odata_field: str
+    operator: str
+
+
+_DATE_FILTERS: Dict[str, DateFilterSpec] = {
+    "startDate": DateFilterSpec("ContentDate/Start", "gt"),
+    "startDateAfter": DateFilterSpec("ContentDate/Start", "gt"),
+    "startDateBefore": DateFilterSpec("ContentDate/Start", "lt"),
+    "completionDate": DateFilterSpec("ContentDate/End", "lt"),
+    "publishedAfter": DateFilterSpec("PublicationDate", "gt"),
+    "publishedBefore": DateFilterSpec("PublicationDate", "lt"),
+}
+
+# Attribute parameters grouped by type
+_STRING_ATTRIBUTES = {"productType", "orbitDirection", "sensorMode", "processingLevel"}
+_INTEGER_ATTRIBUTES = {"orbitNumber", "relativeOrbitNumber"}
+
+# Parameters to skip (handled separately or not filter-related)
+_INTERNAL_PARAMS = {"top", "skip"}
+
+
+def _build_odata_filter(collection: str, search_terms: Dict[str, Any]) -> str:
+    """Build $filter expression from search terms."""
+    filters: List[str] = [f"Collection/Name eq '{collection}'"]
+
     for key, value in search_terms.items():
-        val = _serialize_search_term(value)
-        valid = True
-        if validate_search_terms:
-            cfg = description.get(key)
-            if cfg is None:
-                assert False, (
-                    f'search_term with name "{key}" was not found for collection.'
-                    + f" Available terms are: {', '.join(description.keys())}"
-                )
-                continue
-            valid = _valid_search_term(val, cfg)
-        if valid:
-            query_list.append(f"{key}={val}")
+        if key in _INTERNAL_PARAMS:
+            continue
 
-    return (
-        "https://catalogue.dataspace.copernicus.eu"
-        + f"/resto/api/collections/{collection}/search.json?{'&'.join(query_list)}"
-    )
-
-
-def _serialize_search_term(search_term: object) -> str:
-    if isinstance(search_term, list):
-        return ",".join(search_term)
-
-    if isinstance(search_term, datetime):
-        return search_term.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    if isinstance(search_term, date):
-        return search_term.strftime("%Y-%m-%d")
-
-    return str(search_term)
-
-
-def _valid_search_term(search_term: str, cfg: Dict[str, str]) -> bool:
-    return (
-        _valid_match_pattern(search_term, cfg)
-        and _valid_min_inclusive(search_term, cfg)
-        and _valid_max_inclusive(search_term, cfg)
-    )
-
-
-def _valid_match_pattern(search_term: str, cfg: Dict[str, str]) -> bool:
-    pattern = cfg.get("pattern")
-    if not pattern:
-        return True
-
-    if re.match(pattern, search_term) is None:
-        assert False, f"search_term {search_term} does not match pattern {pattern}"
-        return False
-    return True
-
-
-def _valid_min_inclusive(search_term: str, cfg: Dict[str, str]) -> bool:
-    min_inclusive = cfg.get("minInclusive")
-    if not min_inclusive:
-        return True
-
-    if int(search_term) < int(min_inclusive):
-        assert False, (
-            f"search_term {search_term} is less than min_inclusive {min_inclusive}"
-        )
-        return False
-    return True
-
-
-def _valid_max_inclusive(search_term: str, cfg: Dict[str, str]) -> bool:
-    max_inclusive = cfg.get("maxInclusive")
-    if not max_inclusive:
-        return True
-
-    if int(search_term) > int(max_inclusive):
-        assert False, (
-            f"search_term {search_term} is greater than max_inclusive {max_inclusive}"
-        )
-        return False
-    return True
-
-
-_describe_docs: Dict[str, bytes] = {}
-
-
-def _get_describe_doc(
-    collection: str, proxies: Union[Dict[str, str], None] = None
-) -> bytes:
-    docs = _describe_docs.get(collection)
-    if docs:
-        return docs
-    session = Credentials.make_session(None, False, Credentials.RETRIES, proxies)
-    attempts = 0
-    while attempts < 10:
-        attempts += 1
-        with session.get(
-            "https://catalogue.dataspace.copernicus.eu"
-            f"/resto/api/collections/{collection}/describe.xml"
-        ) as res:
-            if res.status_code >= 500:
-                sleep(60 * (1 + (random() / 4)))
-                continue
-            assert res.status_code == 200, (
-                f"Unable to find collection with name {collection}. Please see "
-                "https://documentation.dataspace.copernicus.eu"
-                "/APIs/OpenSearch.html#collections for a list of collections"
+        if key == "box":
+            raise ValueError(
+                "The 'box' parameter is no longer supported. "
+                "Use 'geometry' with WKT POLYGON format instead. "
+                "Example: geometry='POLYGON((west south, west north, "
+                "east north, east south, west south))'. "
+                "See README for conversion examples."
             )
 
-            _describe_docs[collection] = res.content
-            return res.content
-    assert False, f"Failed {attempts} times to get collection {collection}, giving up."
+        if key in _DATE_FILTERS:
+            spec = _DATE_FILTERS[key]
+            date_str = _format_odata_date(value)
+            filters.append(f"{spec.odata_field} {spec.operator} {date_str}")
+
+        elif key == "geometry":
+            filters.append(f"OData.CSC.Intersects(area=geography'SRID=4326;{value}')")
+
+        elif key == "cloudCover":
+            filters.append(_build_cloud_cover_filter(value))
+
+        elif key in _STRING_ATTRIBUTES:
+            filters.append(_build_attribute_filter(key, value, "StringAttribute", "eq"))
+
+        elif key in _INTEGER_ATTRIBUTES:
+            filters.append(
+                _build_attribute_filter(key, value, "IntegerAttribute", "eq")
+            )
+
+        elif key == "raw_filter":
+            filters.append(str(value))
+
+        # Ignore unknown parameters (they may be OData-specific like orderby)
+
+    return " and ".join(filters)
+
+
+def _format_odata_date(date_value: Union[str, date, datetime]) -> str:
+    """Format date value."""
+    if isinstance(date_value, datetime):
+        return date_value.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    if isinstance(date_value, date):
+        return f"{date_value.strftime('%Y-%m-%d')}T00:00:00.000Z"
+    if isinstance(date_value, str):
+        # If already formatted, return as-is
+        if "T" in date_value:
+            # Ensure it ends with Z if no timezone
+            has_tz = (
+                date_value.endswith("Z")
+                or "+" in date_value
+                or date_value.count("-") > 2
+            )
+            if not has_tz:
+                return f"{date_value}.000Z"
+            return date_value
+        # Date-only string
+        return f"{date_value}T00:00:00.000Z"
+    return str(date_value)
+
+
+def _build_attribute_filter(
+    attr_name: str,
+    attr_value: Any,
+    attr_type: str,
+    operator: str = "eq",
+) -> str:
+    """
+    Build OData attribute filter expression
+    """
+    value_str = str(attr_value)
+
+    if attr_type == "StringAttribute":
+        value_str = f"'{attr_value}'"
+    elif attr_type in ("DoubleAttribute", "IntegerAttribute"):
+        # Ensure numeric format
+        if attr_type == "DoubleAttribute":
+            value_str = str(float(attr_value))
+        else:
+            value_str = str(int(attr_value))
+
+    return (
+        f"Attributes/OData.CSC.{attr_type}/any("
+        f"att:att/Name eq '{attr_name}' and "
+        f"att/OData.CSC.{attr_type}/Value {operator} {value_str})"
+    )
+
+
+def _build_attribute_range_filter(
+    attr_name: str,
+    min_value: Union[int, float],
+    max_value: Union[int, float],
+    attr_type: str,
+) -> str:
+    """Build attribute range filter for [min_value, max_value]."""
+    # Build two separate attribute filters and join them
+    min_filter = _build_attribute_filter(attr_name, min_value, attr_type, "ge")
+    max_filter = _build_attribute_filter(attr_name, max_value, attr_type, "le")
+    return f"({min_filter} and {max_filter})"
+
+
+def _build_cloud_cover_filter(value: Any) -> str:
+    """Build filter for cloudCover. Accepts single value (max) or [min, max] range."""
+    if isinstance(value, (list, tuple)) and len(value) == 2:
+        return _build_attribute_range_filter(
+            "cloudCover", value[0], value[1], "DoubleAttribute"
+        )
+    return _build_attribute_filter("cloudCover", value, "DoubleAttribute", "le")
+
+
+def get_product_attribute(product: Dict[str, Any], name: str) -> Any:
+    """
+    Get an attribute value from a product's Attributes array.
+
+    Args:
+        product: Product dictionary
+        name: Attribute name to retrieve (e.g., 'cloudCover', 'productType')
+
+    Returns:
+        The attribute value if found, None otherwise
+    """
+    for attr in product.get("Attributes", []):
+        if attr.get("Name") == name:
+            return attr.get("Value")
+    return None

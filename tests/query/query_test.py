@@ -3,88 +3,104 @@ from datetime import date, datetime
 import pytest
 
 from cdsetool.query import (
-    _serialize_search_term,
-    _valid_match_pattern,
-    _valid_max_inclusive,
-    _valid_min_inclusive,
-    _valid_search_term,
+    _build_attribute_filter,
+    _build_attribute_range_filter,
+    _build_odata_filter,
+    _format_odata_date,
     geojson_to_wkt,
     shape_to_wkt,
 )
 
 
-def test_serialize_search_term() -> None:
-    assert _serialize_search_term("foo") == "foo"
-    assert _serialize_search_term(["foo", "bar"]) == "foo,bar"
-    assert _serialize_search_term(date(2020, 1, 1)) == "2020-01-01"
+def test_format_odata_date() -> None:
+    """Test OData date formatting"""
+    # datetime objects
     assert (
-        _serialize_search_term(datetime(2020, 1, 1, 12, 0, 0)) == "2020-01-01T12:00:00Z"
+        _format_odata_date(datetime(2020, 1, 1, 12, 0, 0)) == "2020-01-01T12:00:00.000Z"
     )
+    # date objects
+    assert _format_odata_date(date(2020, 1, 1)) == "2020-01-01T00:00:00.000Z"
+    # string dates
+    assert _format_odata_date("2020-01-01") == "2020-01-01T00:00:00.000Z"
+    # string datetimes with Z
+    assert _format_odata_date("2020-01-01T12:00:00Z") == "2020-01-01T12:00:00Z"
+    # string datetimes without Z
+    assert _format_odata_date("2020-01-01T12:00:00") == "2020-01-01T12:00:00.000Z"
 
 
-def test_validate_search_term() -> None:
-    product_type = {"pattern": "^(S2MSI1C|S2MSI2A)$"}
-    orbit_number = {
-        "minInclusive": "1",
-        "pattern": "^(\\[|\\]|[0-9])?[0-9]+$|^[0-9]+?(\\[|\\])$|^(\\[|\\])[0-9]+,[0-9]+(\\[|\\])$",
-    }
-    assert _valid_search_term("S2MSI1C", product_type)
-    assert _valid_search_term("1", orbit_number)
-    assert _valid_search_term("43212", orbit_number)
+def test_build_attribute_filter() -> None:
+    """Test OData attribute filter building"""
+    # String attribute
+    result = _build_attribute_filter("productType", "S2MSI2A", "StringAttribute", "eq")
+    assert "Attributes/OData.CSC.StringAttribute/any(" in result
+    assert "att/Name eq 'productType'" in result
+    assert "att/OData.CSC.StringAttribute/Value eq 'S2MSI2A'" in result
 
-    with pytest.raises(AssertionError):
-        _valid_search_term("foo", product_type)
+    # Double attribute
+    result = _build_attribute_filter("cloudCover", 40.5, "DoubleAttribute", "le")
+    assert "Attributes/OData.CSC.DoubleAttribute/any(" in result
+    assert "att/Name eq 'cloudCover'" in result
+    assert "att/OData.CSC.DoubleAttribute/Value le 40.5" in result
 
-    with pytest.raises(AssertionError):
-        _valid_search_term("0", orbit_number)
-
-    with pytest.raises(AssertionError):
-        _valid_search_term("-100", orbit_number)
-
-    with pytest.raises(AssertionError):
-        _valid_search_term("foobar", orbit_number)
-
-
-def test_assert_match_pattern() -> None:
-    pattern = {
-        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(|Z|[\\+\\-][0-9]{2}:[0-9]{2}))?$"
-    }
-
-    with pytest.raises(AssertionError):
-        _valid_match_pattern("foo", pattern)
-
-    with pytest.raises(AssertionError):
-        _valid_match_pattern("01-01-2020", pattern)
-
-    assert _valid_match_pattern("2020-01-01", pattern)
-    assert _valid_match_pattern("2020-01-01T20:31:28.888Z", pattern)
-
-    pattern = {"pattern": "^(asc|desc|ascending|descending)$"}
-
-    with pytest.raises(AssertionError):
-        _valid_match_pattern("foo", pattern)
-
-    with pytest.raises(AssertionError):
-        _valid_match_pattern("01-01-2020", pattern)
-
-    assert _valid_match_pattern("asc", pattern)
-    assert _valid_match_pattern("descending", pattern)
+    # Integer attribute
+    result = _build_attribute_filter(
+        "relativeOrbitNumber", 123, "IntegerAttribute", "eq"
+    )
+    assert "Attributes/OData.CSC.IntegerAttribute/any(" in result
+    assert "att/Name eq 'relativeOrbitNumber'" in result
+    assert "att/OData.CSC.IntegerAttribute/Value eq 123" in result
 
 
-def test_assert_min_inclusive() -> None:
-    assert _valid_min_inclusive("1", {"minInclusive": "1"})
-    assert _valid_min_inclusive("2", {"minInclusive": "1"})
+def test_build_attribute_range_filter() -> None:
+    """Test OData attribute range filter building"""
+    # Double attribute range
+    result = _build_attribute_range_filter("cloudCover", 10, 22, "DoubleAttribute")
+    assert "Attributes/OData.CSC.DoubleAttribute/any(" in result
+    assert "att/Name eq 'cloudCover'" in result
+    assert "att/OData.CSC.DoubleAttribute/Value ge 10.0" in result
+    assert "att/OData.CSC.DoubleAttribute/Value le 22.0" in result
 
-    with pytest.raises(AssertionError):
-        _valid_min_inclusive("0", {"minInclusive": "1"})
+    # Integer attribute range
+    result = _build_attribute_range_filter(
+        "relativeOrbitNumber", 50, 100, "IntegerAttribute"
+    )
+    assert "Attributes/OData.CSC.IntegerAttribute/any(" in result
+    assert "att/Name eq 'relativeOrbitNumber'" in result
+    assert "att/OData.CSC.IntegerAttribute/Value ge 50" in result
+    assert "att/OData.CSC.IntegerAttribute/Value le 100" in result
 
 
-def test_assert_max_inclusive() -> None:
-    assert _valid_max_inclusive("1", {"maxInclusive": "1"})
-    assert _valid_max_inclusive("0", {"maxInclusive": "1"})
+def test_build_odata_filter() -> None:
+    """Test full OData filter expression building"""
+    # Simple filter
+    result = _build_odata_filter(
+        "SENTINEL-2", {"startDate": "2020-01-01", "completionDate": "2020-01-10"}
+    )
+    assert "Collection/Name eq 'SENTINEL-2'" in result
+    assert "ContentDate/Start gt 2020-01-01T00:00:00.000Z" in result
+    assert "ContentDate/End lt 2020-01-10T00:00:00.000Z" in result
 
-    with pytest.raises(AssertionError):
-        _valid_max_inclusive("2", {"maxInclusive": "1"})
+    # Filter with attributes
+    result = _build_odata_filter(
+        "SENTINEL-2", {"cloudCover": 40, "productType": "S2MSI2A"}
+    )
+    assert "Collection/Name eq 'SENTINEL-2'" in result
+    assert "cloudCover" in result
+    assert "productType" in result
+
+    # Filter with cloudCover range
+    result = _build_odata_filter("SENTINEL-2", {"cloudCover": [10, 22]})
+    assert "Collection/Name eq 'SENTINEL-2'" in result
+    assert "cloudCover" in result
+    assert "Value ge 10.0" in result
+    assert "Value le 22.0" in result
+
+    # Filter with cloudCover single value (backward compatibility)
+    result = _build_odata_filter("SENTINEL-2", {"cloudCover": 30})
+    assert "Collection/Name eq 'SENTINEL-2'" in result
+    assert "cloudCover" in result
+    assert "Value le 30.0" in result
+    assert "Value ge" not in result  # Should not have minimum
 
 
 def test_shape_to_wkt() -> None:

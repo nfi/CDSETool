@@ -33,6 +33,8 @@ def query_search_terms(collection: str) -> None:
             print(f"    - Description: {attributes.get('title')}")
         if attributes.get("pattern"):
             print(f"    - Pattern: {attributes.get('pattern')}")
+        if attributes.get("example"):
+            print(f"      Example: {attributes.get('example')}")
         if attributes.get("minInclusive"):
             print(f"    - Min: {attributes.get('minInclusive')}")
         if attributes.get("maxInclusive"):
@@ -48,7 +50,7 @@ def query_search(
     search_term: Annotated[
         Optional[List[str]],
         typer.Option(
-            help="Search by term=value pairs. "
+            help="Search by term=value pairs (e.g., startDate=2024-01-01). "
             + "Pass multiple times for multiple search terms"
         ),
     ] = None,
@@ -64,7 +66,7 @@ def query_search(
         if json:
             print(JSON.dumps(feature))
         else:
-            print(feature.get("properties").get("title"))
+            print(feature.get("Name"))
 
 
 # TODO: implement limit
@@ -81,7 +83,7 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
     search_term: Annotated[
         Optional[List[str]],
         typer.Option(
-            help="Search by term=value pairs. "
+            help="Search by term=value pairs (e.g., startDate=2024-01-01). "
             + "Pass multiple times for multiple search terms"
         ),
     ] = None,

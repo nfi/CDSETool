@@ -84,33 +84,22 @@ def test_query_features_reusable(requests_mock: Any) -> None:
 
 
 def test_query_features_random_access(requests_mock: Any) -> None:
-    _mock_describe(requests_mock)
-    _mock_sentinel_1(requests_mock)
+    """Test random access to products with proper lazy loading"""
+    _mock_sentinel_1_odata(requests_mock)
 
     query = query_features("Sentinel1", {"maxRecords": 10})
 
-    assert (
-        query[0]["properties"]["title"]
-        == "S1A_OPER_AUX_GNSSRD_POD__20171211T101148_V20140628T235949_20140629T235939"
-    )
+    # OData format: products have "Name" field directly (not nested in properties)
+    assert query[0]["Name"] == "S1A_AUX_INS_V20140406T010000_G20140409T142540.SAFE"
     assert len(query.features) == 10
-    assert (
-        query[9]["properties"]["title"]
-        == "S1A_OPER_AUX_POEORB_OPOD_20210302T165817_V20140627T225944_20140629T005944.EOF"
-    )
+    assert query[9]["Name"] == "S1A_AUX_PP2_V20140406T133000_G20241125T134251.SAFE"
     assert len(query.features) == 10
-    assert (
-        query[13]["properties"]["title"]
-        == "S1A_OPER_AUX_GNSSRD_POD__20171211T095233_V20140609T235949_20140610T235939"
-    )
+    assert query[13]["Name"] == "S1A_AUX_INS_V20140406T133000_G20211028T132414.SAFE"
+    assert len(query.features) == 20
+    assert query[2]["Name"] == "S1A_AUX_PP2_V20140406T133000_G20251021T105030.SAFE"
     assert len(query.features) == 20
     assert (
-        query[2]["properties"]["title"]
-        == "S1A_OPER_AUX_GNSSRD_POD__20171211T095728_V20140614T235949_20140615T235939"
-    )
-    assert len(query.features) == 20
-    assert (
-        query[34]["properties"]["title"]
-        == "S1A_OPER_AUX_POEORB_OPOD_20210302T133908_V20140619T225944_20140621T005944.EOF"
+        query[34]["Name"]
+        == "S1A_OPER_AUX_PROQUA_POD__20210408T165229_V20140409T235944_20140410T235943"
     )
     assert len(query.features) == 40

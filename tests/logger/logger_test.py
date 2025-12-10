@@ -2,7 +2,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from cdsetool.download import download_feature
+from cdsetool.download import download_product
 from cdsetool.logger import NoopLogger
 
 
@@ -11,13 +11,12 @@ def test_noop_logger_is_default() -> None:
 
     assert NoopLogger.debug.call_count == 0
 
-    download_feature(
+    # OData format product - missing Id will cause bad URL, triggering debug log
+    download_product(
         {
             "bad_object": True,
-            "properties": {
-                "title": "myfile.xml",
-                "services": {"download": {}},  # missing url
-            },
+            "Name": "myfile.xml",
+            # Missing Id will cause bad URL
         },
         "somewhere",
     )
@@ -27,13 +26,12 @@ def test_noop_logger_is_default() -> None:
 
 def test_noop_does_not_error() -> None:
     try:
-        download_feature(
+        # OData format product - missing Id will cause bad URL, triggering debug log
+        download_product(
             {
                 "bad_object": True,
-                "properties": {
-                    "title": "myfile.xml",
-                    "services": {"download": {}},  # missing url
-                },
+                "Name": "myfile.xml",
+                # Missing Id will cause bad URL
             },
             "somewhere",
         )
