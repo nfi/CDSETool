@@ -1,5 +1,5 @@
 """
-Download features from a Copernicus Data Space Ecosystem OpenSearch API result
+Download features from a Copernicus Data Space Ecosystem OData API result
 
 Provides a function to download a single feature, a function to download all features
 in a result set, and a function to download specific files in a given feature using
@@ -125,38 +125,53 @@ def download_file(url: str, path: Path, options: Dict[str, Any]) -> bool:
 
 
 def download_feature(  # pylint: disable=too-many-return-statements
-    feature, path: str, options: Union[Dict[str, Any], None] = None
+    feature: Dict[str, Any],
+    path: str,
+    options: Union[Dict[str, Any], None] = None,
 ) -> Union[str, None]:
     """
     Download a single feature.
 
-    Returns the feature title.
+    Args:
+        feature: Feature dictionary with Id, Name, etc.
+        path: Output directory path
+        options: Download options. If 'filter_pattern' is specified,
+            'collection' must also be provided in options.
+
+    Returns the feature name.
     """
     options = options or {}
     log = _get_logger(options)
     temp_dir_usr = _get_temp_dir(options)
-    title = feature.get("properties").get("title")
-    collection = feature.get("properties").get("collection")
+    title = feature.get("Name")
+    feature_id = feature.get("Id")
     download_full = "filter_pattern" not in options
 
-    try:
-        manifest_filename = "" if download_full else MANIFEST_FILENAMES[collection]
-    except KeyError:
-        log.error(
-            f"No support for downloading individual files in {collection} products"
-        )
+    if not title or not feature_id:
+        log.debug(f"Bad feature ID ('{feature_id}') or title ('{title}')")
         return None
+
+    manifest_filename = ""
+    if not download_full:
+        collection = options.get("collection")
+        if not collection:
+            log.error("'collection' is required in options when using 'filter_pattern'")
+            return None
+        try:
+            manifest_filename = MANIFEST_FILENAMES[collection]
+        except KeyError:
+            log.error(
+                f"No support for downloading individual files in {collection} products"
+            )
+            return None
 
     # Prepare to download full product, or manifest file if filter_pattern is used
     filename = title + ".zip" if download_full else manifest_filename
     url = (
-        _get_feature_url(feature)
+        _get_feature_url(feature_id)
         if download_full
-        else _get_odata_url(feature["id"], title, filename)
+        else _get_odata_url(feature_id, title, filename)
     )
-    if not url or not title:
-        log.debug(f"Bad URL ('{url}') or title ('{title}')")
-        return None
 
     result_path = os.path.join(path, filename if download_full else title)
     if not options.get("overwrite_existing", False) and os.path.exists(result_path):
@@ -180,7 +195,7 @@ def download_feature(  # pylint: disable=too-many-return-statements
             output_file = os.path.join(temp_product_path, file)
             os.makedirs(os.path.dirname(output_file), exist_ok=True)
             if not download_file(
-                _get_odata_url(feature["id"], title, str(file)),
+                _get_odata_url(feature_id, title, str(file)),
                 Path(output_file),
                 options,
             ):
@@ -203,7 +218,10 @@ def download_features(
 
     Feature IDs are yielded as they are downloaded
     """
-    options = options or {}
+    # Create a copy to avoid mutating the caller's dict
+    options = dict(options) if options else {}
+
+    options["collection"] = features.collection
 
     options["credentials"] = _get_credentials(options)
     options["logger"] = _get_logger(options)
@@ -221,14 +239,13 @@ def download_features(
     options["monitor"].stop()
 
 
-def _get_feature_url(feature) -> str:
-    return feature.get("properties").get("services").get("download").get("url")
+def _get_feature_url(feature_id: str) -> str:
+    """Generate download URL for a feature from its ID."""
+    return f"https://catalogue.dataspace.copernicus.eu/download/{feature_id}"
 
 
 def _get_odata_url(product_id: str, product_name: str, href: str) -> str:
-    """
-    Convert href, describing file location in manifest file, to an OData download URL.
-    """
+    """Convert file path from manifest to download URL."""
     odata_url = "https://download.dataspace.copernicus.eu/odata/v1"
     path = "/".join([f"Nodes({item})" for item in href.split("/")])
     return f"{odata_url}/Products({product_id})/Nodes({product_name})/{path}/$value"

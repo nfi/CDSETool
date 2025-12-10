@@ -171,12 +171,10 @@ def test_download_file_failure(requests_mock: Any, mocker: Any, tmp_path: Path) 
 def test_download_feature(mocker: Any, tmp_path: Path) -> None:
     title = "S2B_MSIL1C_20241209T162609_N0511_R040_T17UPV_20241209T195414.SAFE"
     mock_feature = {
-        "id": "a6215824-704b-46d7-a2ec-efea4e468668",
-        "properties": {
-            "title": title,
-            "collection": "SENTINEL-2",
-            "services": {"download": {"url": "http://example.com"}},
-        },
+        "Id": "a6215824-704b-46d7-a2ec-efea4e468668",
+        "Name": title,
+        "ContentLength": 1000,
+        "Online": True,
     }
     mocker.patch("cdsetool.download.download_file", mock_download_file)
 
@@ -189,12 +187,10 @@ def test_download_feature(mocker: Any, tmp_path: Path) -> None:
 def test_download_feature_failure(mocker: Any, tmp_path: Path) -> None:
     title = "S2B_MSIL1C_20241209T162609_N0511_R040_T17UPV_20241209T195414.SAFE"
     mock_feature = {
-        "id": "a6215824-704b-46d7-a2ec-efea4e468668",
-        "properties": {
-            "title": title,
-            "collection": "SENTINEL-2",
-            "services": {"download": {"url": "http://example.com"}},
-        },
+        "Id": "a6215824-704b-46d7-a2ec-efea4e468668",
+        "Name": title,
+        "ContentLength": 1000,
+        "Online": True,
     }
     mocker.patch(
         "cdsetool.download.download_file", side_effect=lambda url, path, options: None
@@ -206,11 +202,13 @@ def test_download_feature_failure(mocker: Any, tmp_path: Path) -> None:
 
 
 def test_download_feature_with_filter(mocker: Any, tmp_path: Path) -> None:
-    options = {"filter_pattern": "*.jp2"}
+    options = {"filter_pattern": "*.jp2", "collection": "SENTINEL-2"}
     title = "S2B_MSIL1C_20241209T162609_N0511_R040_T17UPV_20241209T195414.SAFE"
     mock_feature = {
-        "id": "a6215824-704b-46d7-a2ec-efea4e468668",
-        "properties": {"title": title, "collection": "SENTINEL-2"},
+        "Id": "a6215824-704b-46d7-a2ec-efea4e468668",
+        "Name": title,
+        "ContentLength": 1000,
+        "Online": True,
     }
     mocker.patch(
         "cdsetool.download.filter_files",
@@ -219,20 +217,19 @@ def test_download_feature_with_filter(mocker: Any, tmp_path: Path) -> None:
     mocker.patch("cdsetool.download.download_file", mock_download_file)
 
     final_dir = str(tmp_path / "test_download_feature_with_filter")
-    product_name = download_feature(mock_feature, final_dir, options)
-    assert product_name == mock_feature["properties"]["title"]
+    feature_name = download_feature(mock_feature, final_dir, options)
+    assert feature_name == mock_feature["Name"]
     assert os.path.exists(os.path.join(final_dir, title, "GRANULE", "file1.jp2"))
     assert os.path.exists(os.path.join(final_dir, title, "GRANULE", "file2.jp2"))
 
 
 def test_download_feature_with_filter_failure(mocker: Any, tmp_path: Path) -> None:
-    options = {"filter_pattern": "*.jp2"}
+    options = {"filter_pattern": "*.jp2", "collection": "SENTINEL-2"}
     mock_feature = {
-        "id": "a6215824-704b-46d7-a2ec-efea4e468668",
-        "properties": {
-            "title": "S2B_MSIL1C_20241209T162609_N0511_R040_T17UPV_20241209T195414.SAFE",
-            "collection": "SENTINEL-2",
-        },
+        "Id": "a6215824-704b-46d7-a2ec-efea4e468668",
+        "Name": "S2B_MSIL1C_20241209T162609_N0511_R040_T17UPV_20241209T195414.SAFE",
+        "ContentLength": 1000,
+        "Online": True,
     }
     mocker.patch(
         "cdsetool.download.filter_files",
@@ -243,23 +240,28 @@ def test_download_feature_with_filter_failure(mocker: Any, tmp_path: Path) -> No
     )
 
     final_dir = str(tmp_path / "test_download_feature_with_filter_failure")
-    product_name = download_feature(mock_feature, final_dir, options)
-    assert product_name is None
+    feature_name = download_feature(mock_feature, final_dir, options)
+    assert feature_name is None
 
 
 def test_download_feature_with_filter_unsupported_coll(
     caplog: Any, tmp_path: Path
 ) -> None:
-    options = {"logger": logging.getLogger(__name__), "filter_pattern": "*MTL.txt"}
+    options = {
+        "logger": logging.getLogger(__name__),
+        "filter_pattern": "*MTL.txt",
+        "collection": "Landsat8",
+    }
     mock_feature = {
-        "id": "a6215824-704b-46d7-a2ec-efea4e468668",
-        "properties": {"title": "L8XXX", "collection": "Landsat8"},
+        "Id": "a6215824-704b-46d7-a2ec-efea4e468668",
+        "Name": "L8XXX",
+        "ContentLength": 1000,
+        "Online": True,
     }
 
     final_dir = str(tmp_path / "test_download_feature_with_filter_unsupported_coll")
-    product_name = download_feature(mock_feature, final_dir, options)
-    assert product_name is None
+    feature_name = download_feature(mock_feature, final_dir, options)
+    assert feature_name is None
     assert (
-        "No support for downloading individual files in "
-        f"{mock_feature['properties']['collection']} products"
+        "No support for downloading individual files in Landsat8 products"
     ) in caplog.text
