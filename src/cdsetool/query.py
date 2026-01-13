@@ -105,6 +105,10 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
 
         return self.features[index]
 
+    def get_url(self) -> str:
+        """Return the current query URL"""
+        return self.next_url or self._build_query_url(include_count=True)
+
     def _build_query_url(self, include_count: bool = False) -> str:
         """Build query URL with current skip offset"""
         base_url = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
