@@ -250,6 +250,30 @@ def _get_product_url(product_id: str) -> str:
     return f"https://catalogue.dataspace.copernicus.eu/download/{product_id}"
 
 
+def get_product_download_info(product: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Get product download information without downloading.
+
+    Returns dict with product metadata and download URL.
+    No credentials required.
+
+    Args:
+        product: OData product dictionary
+
+    Returns:
+        Dict with 'name', 'id', 'url', 'size', and 'date' fields
+    """
+    product_id = product.get("Id", "")
+    content_date = product.get("ContentDate", {})
+    return {
+        "name": product.get("Name"),
+        "id": product_id,
+        "url": _get_product_url(product_id),
+        "size": product.get("ContentLength", 0),
+        "date": content_date.get("Start", ""),
+    }
+
+
 def _get_odata_url(product_id: str, product_name: str, href: str) -> str:
     """
     Convert href, describing file location in manifest file, to an OData download URL.
