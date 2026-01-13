@@ -5,80 +5,67 @@ import pytest
 from cdsetool.query import query_features
 
 
-def _mock_describe(requests_mock: Any) -> None:
-    url = "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/describe.xml"
+def _mock_sentinel_1_odata(requests_mock: Any) -> None:
+    """Mock OData API responses for SENTINEL-1 queries"""
+    # Page 1 with $count=true
     with open(
-        "tests/query/mock/sentinel_1/describe.xml", "r", encoding="utf-8"
-    ) as file:
-        requests_mock.get(url, text=file.read())
+        "tests/query/mock/sentinel_1/odata_page_1.json", "r", encoding="utf-8"
+    ) as f:
+        requests_mock.get(
+            "https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name%20eq%20%27SENTINEL-1%27&$top=10&$count=true&$expand=Attributes&$orderby=ContentDate/Start%20asc",
+            text=f.read(),
+        )
 
-
-def _mock_sentinel_1(requests_mock: Any) -> None:
-    urls = [
-        (
-            "tests/query/mock/sentinel_1/page_1.json",
-            "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/search.json?maxRecords=10&exactCount=1",
-        ),
-        (
-            "tests/query/mock/sentinel_1/page_2.json",
-            "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/search.json?maxRecords=10&exactCount=0&page=2",
-        ),
-        (
-            "tests/query/mock/sentinel_1/page_3.json",
-            "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/search.json?maxRecords=10&exactCount=0&page=3",
-        ),
-        (
-            "tests/query/mock/sentinel_1/page_4.json",
-            "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/search.json?maxRecords=10&exactCount=0&page=4",
-        ),
-        (
-            "tests/query/mock/sentinel_1/page_5.json",
-            "https://catalogue.dataspace.copernicus.eu/resto/api/collections/Sentinel1/search.json?maxRecords=10&exactCount=0&page=5",
-        ),
+    # Subsequent pages without $count
+    pages = [
+        (2, 10, "odata_page_2.json"),
+        (3, 20, "odata_page_3.json"),
+        (4, 30, "odata_page_4.json"),
+        (5, 40, "odata_page_5.json"),
     ]
 
-    for file, url in urls:
-        with open(file, "r", encoding="utf-8") as file:
-            requests_mock.get(url, text=file.read())
+    for page_num, skip, filename in pages:
+        with open(
+            f"tests/query/mock/sentinel_1/{filename}", "r", encoding="utf-8"
+        ) as f:
+            requests_mock.get(
+                f"https://catalogue.dataspace.copernicus.eu/odata/v1/Products?$filter=Collection/Name%20eq%20%27SENTINEL-1%27&$top=10&$skip={skip}&$expand=Attributes&$orderby=ContentDate/Start%20asc",
+                text=f.read(),
+            )
 
 
 def test_query_features_length(requests_mock: Any) -> None:
-    _mock_describe(requests_mock)
-    _mock_sentinel_1(requests_mock)
+    """Test that query returns correct total count and iterates through all features"""
+    _mock_sentinel_1_odata(requests_mock)
+    query = query_features("SENTINEL-1", {"top": 10})
 
-    query = query_features("Sentinel1", {"maxRecords": 10})
-
-    assert len(query) == 48
+    assert len(query) == 47
 
     manual_count = 0
     for feature in query:
         manual_count += 1
 
-    assert manual_count == 48
+    assert manual_count == 47
 
 
-def test_query_features_bad_search_terms(requests_mock: Any) -> None:
-    _mock_describe(requests_mock)
-    _mock_sentinel_1(requests_mock)
+def test_query_features_unknown_params_ignored(requests_mock: Any) -> None:
+    """Test that unknown parameters are ignored (no validation in OData)"""
+    _mock_sentinel_1_odata(requests_mock)
 
-    with pytest.raises(AssertionError):
-        query_features("Sentinel1", {"maxRecords": 10, "bogusParam": 27})
-
-    query_features(
-        "Sentinel1",
-        {"maxRecords": 10, "bogusParam": 27},
-        options={"validate_search_terms": False},
-    )
+    # Unknown parameters should be ignored, not cause errors
+    query = query_features("SENTINEL-1", {"top": 10, "bogusParam": 27})
+    # Should still work and return results
+    assert len(query) == 47
 
 
 def test_query_features_reusable(requests_mock: Any) -> None:
-    _mock_describe(requests_mock)
-    _mock_sentinel_1(requests_mock)
+    """Test that query can be iterated multiple times"""
+    _mock_sentinel_1_odata(requests_mock)
 
-    query = query_features("Sentinel1", {"maxRecords": 10})
+    query = query_features("SENTINEL-1", {"top": 10})
 
     assert len(query) == len(query)
-    assert len(query) == 48  # query is not exhausted after first len call
+    assert len(query) == 47  # query is not exhausted after first len call
 
     assert list(query) == list(query)  # query is not exhausted after first iteration
 
@@ -87,7 +74,7 @@ def test_query_features_random_access(requests_mock: Any) -> None:
     """Test random access to products with proper lazy loading"""
     _mock_sentinel_1_odata(requests_mock)
 
-    query = query_features("Sentinel1", {"maxRecords": 10})
+    query = query_features("SENTINEL-1", {"top": 10})
 
     # OData format: products have "Name" field directly (not nested in properties)
     assert query[0]["Name"] == "S1A_AUX_INS_V20140406T010000_G20140409T142540.SAFE"
