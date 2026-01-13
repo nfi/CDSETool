@@ -10,9 +10,20 @@ from typing import Any, Dict, List, Optional
 import typer
 from typing_extensions import Annotated
 
-from cdsetool.download import download_features
+from cdsetool.download import download_features, get_product_download_info
 from cdsetool.monitor import StatusMonitor
 from cdsetool.query import describe_collection, query_features
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format size in bytes to human readable format."""
+    size: float = size_bytes
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} PB"
+
 
 app = typer.Typer(no_args_is_help=True)
 
@@ -89,7 +100,10 @@ def query_search(
 @app.command("download")
 def download(  # pylint: disable=[too-many-arguments, too-many-positional-arguments]
     collection: str,
-    path: str,
+    path: Annotated[
+        Optional[str],
+        typer.Argument(help="Output directory path (required unless --list-only)"),
+    ] = None,
     concurrency: Annotated[
         int, typer.Option(help="Number of concurrent connections")
     ] = 1,
@@ -112,16 +126,43 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
             )
         ),
     ] = None,
+    list_only: Annotated[
+        bool,
+        typer.Option(
+            "--list-only",
+            help="List products and download URLs without downloading "
+            "(no credentials required)",
+        ),
+    ] = False,
 ) -> None:
     """
     Download all features matching the search terms
     """
+    search_term = search_term or []
+    features = query_features(collection, _to_dict(search_term))
+
+    if list_only:
+        count = 0
+        total_size = 0
+        for product in features:
+            info = get_product_download_info(product)
+            print(f"{info['name']}")
+            print(f"  Date: {info['date']}")
+            print(f"  Size: {_format_size(info['size'])}")
+            print(f"  URL:  {info['url']}")
+            count += 1
+            total_size += info["size"]
+        print()
+        print(f"Total: {count} products, {_format_size(total_size)}")
+        return
+
+    if not path:
+        print("Error: PATH is required unless --list-only is specified")
+        sys.exit(1)
+
     if not os.path.exists(path):
         print(f"Path {path} does not exist")
         sys.exit(1)
-
-    search_term = search_term or []
-    features = query_features(collection, _to_dict(search_term))
 
     list(
         download_features(
