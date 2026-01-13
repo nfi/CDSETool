@@ -5,7 +5,7 @@ Command line interface
 import json as JSON
 import os
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
 from typing_extensions import Annotated
@@ -53,12 +53,30 @@ def query_search(
         ),
     ] = None,
     json: Annotated[bool, typer.Option(help="Output JSON")] = False,
+    count_only: Annotated[
+        bool,
+        typer.Option(
+            "--count-only",
+            help="Only show query URL and total result count "
+            "without fetching all results",
+        ),
+    ] = False,
 ) -> None:
     """
     Search for features matching the search terms
     """
     search_term = search_term or []
-    features = query_features(collection, _to_dict(search_term))
+    search_terms = _to_dict(search_term)
+
+    if count_only:
+        # Fetch no products, only the count
+        search_terms["top"] = 0
+        products = query_features(collection, search_terms)
+        print(f"URL: {products.get_url()}")
+        print(f"Total results: {len(products)}")
+        return
+
+    features = query_features(collection, search_terms)
 
     for feature in features:
         if json:
@@ -126,7 +144,7 @@ def main():
     app()
 
 
-def _to_dict(term_list: List[str]) -> Dict[str, str]:
+def _to_dict(term_list: List[str]) -> Dict[str, Any]:
     search_terms = {}
     for item in term_list:
         key, value = item.split("=")
