@@ -12,7 +12,7 @@ from typing_extensions import Annotated
 
 from cdsetool.download import download_features, get_product_download_info
 from cdsetool.monitor import StatusMonitor
-from cdsetool.query import describe_collection, query_features
+from cdsetool.query import describe_collection, get_supported_params, query_features
 
 
 def _format_size(size_bytes: int) -> str:
@@ -31,25 +31,69 @@ query_app = typer.Typer(no_args_is_help=True)
 app.add_typer(query_app, name="query")
 
 
+def _print_attributes(attributes: dict, compact: bool = False) -> None:
+    """Print attribute details in a formatted way."""
+    for key, attr in attributes.items():
+        if compact:
+            attr_type = attr.get("type", "")
+            print(f"  - {key}" + (f" ({attr_type})" if attr_type else ""))
+        else:
+            print(f"  - {key}")
+            if attr.get("title"):
+                print(f"      Description: {attr.get('title')}")
+            if attr.get("type"):
+                print(f"      Type: {attr.get('type')}")
+            if attr.get("example"):
+                print(f"      Example: {attr.get('example')}")
+            if attr.get("minInclusive"):
+                print(f"      Min: {attr.get('minInclusive')}")
+            if attr.get("maxInclusive"):
+                print(f"      Max: {attr.get('maxInclusive')}")
+
+
 @query_app.command("search-terms")
-def query_search_terms(collection: str) -> None:
+def query_search_terms(
+    collection: Annotated[
+        Optional[str],
+        typer.Argument(
+            help="Collection name (e.g., SENTINEL-1, SENTINEL-2). "
+            "If omitted, shows only supported parameters without querying the server."
+        ),
+    ] = None,
+) -> None:
     """
     List the available search terms for a collection
     """
-    print(f"Available search terms for collection {collection}:")
-    # TODO: print validators
-    for key, attributes in describe_collection(collection).items():
-        print(f"  - {key}")
-        if attributes.get("title"):
-            print(f"    - Description: {attributes.get('title')}")
-        if attributes.get("example"):
-            print(f"      Example: {attributes.get('example')}")
-        if attributes.get("minInclusive"):
-            print(f"    - Min: {attributes.get('minInclusive')}")
-        if attributes.get("maxInclusive"):
-            print(f"    - Max: {attributes.get('maxInclusive')}")
+    if collection is None:
+        # No collection specified - show only supported params (no API call)
+        supported = get_supported_params()
+        print("Supported search terms (use with --search-term):")
+        print()
+        _print_attributes(supported)
+        print()
+        print(
+            "Specify a collection name to see additional server-available attributes."
+        )
+    else:
+        # Collection specified - fetch from API and show both categories
+        result = describe_collection(collection)
+        supported = result.get("supported", {})
+        available = result.get("available", {})
+
+        print(f"Search terms for collection {collection}:")
+        print()
+        print("SUPPORTED (can be used in --search-term):")
+        if supported:
+            _print_attributes(supported)
+        else:
+            print("  (none)")
 
         print()
+        print("AVAILABLE ON SERVER (not yet supported by CDSETool):")
+        if available:
+            _print_attributes(available, compact=True)
+        else:
+            print("  (none)")
 
 
 # TODO: implement limit

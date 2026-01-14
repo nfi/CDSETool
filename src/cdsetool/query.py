@@ -281,60 +281,161 @@ def geojson_to_wkt(geojson_in: Union[str, Dict]) -> str:
     return f"POLYGON({paired_coord})"
 
 
+# Built-in parameters supported by CDSETool's filter implementation
+# These are always available regardless of server response
+_BUILTIN_PARAMS: Dict[str, Dict[str, Any]] = {
+    "startDate": {
+        "title": "Start date for acquisition (ContentDate/Start gt)",
+        "example": "2024-01-01 or 2024-01-01T00:00:00Z",
+    },
+    "startDateBefore": {
+        "title": "Upper bound for start date (ContentDate/Start lt)",
+        "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+    },
+    "completionDate": {
+        "title": "End date for acquisition (ContentDate/End lt)",
+        "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+    },
+    "geometry": {
+        "title": "WKT geometry for spatial filtering",
+        "example": "POLYGON((lon1 lat1, lon2 lat2, ...))",
+    },
+    "publishedAfter": {
+        "title": "Filter by publication date (after)",
+        "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+    },
+    "publishedBefore": {
+        "title": "Filter by publication date (before)",
+        "example": "2024-01-31 or 2024-01-31T23:59:59Z",
+    },
+}
+
+# Attribute parameters from Attributes endpoint that CDSETool can filter on
+_SUPPORTED_ATTRIBUTES: Dict[str, Dict[str, Any]] = {
+    "productType": {
+        "title": "Product type (e.g., S2MSI1C, S2MSI2A, GRD, SLC)",
+        "type": "String",
+    },
+    "orbitDirection": {
+        "title": "Orbit direction (ASCENDING or DESCENDING)",
+        "type": "String",
+    },
+    "sensorMode": {
+        "title": "Sensor mode",
+        "type": "String",
+    },
+    "processingLevel": {
+        "title": "Processing level",
+        "type": "String",
+    },
+    "relativeOrbitNumber": {
+        "title": "Relative orbit number",
+        "type": "Integer",
+    },
+    "orbitNumber": {
+        "title": "Absolute orbit number",
+        "type": "Integer",
+    },
+    "cloudCover": {
+        "title": "Cloud cover percentage (0-100)",
+        "type": "Double",
+        "maxInclusive": "100",
+        "minInclusive": "0",
+    },
+}
+
+
+def get_supported_params() -> Dict[str, Any]:
+    """Get all parameters supported by CDSETool's filter implementation"""
+    params = _BUILTIN_PARAMS.copy()
+    params.update(_SUPPORTED_ATTRIBUTES)
+    return params
+
+
+def _fetch_collection_attributes(
+    collection: str, proxies: Union[Dict[str, str], None] = None
+) -> List[Dict[str, str]]:
+    """
+    Fetch available attributes for a collection from the OData API.
+
+    Args:
+        collection: Collection name (e.g., "SENTINEL-2")
+        proxies: Optional proxy configuration
+
+    Returns:
+        List of attribute dictionaries with "Name" and "ValueType" keys
+
+    Raises:
+        ValueError: If the API request fails
+    """
+    url = f"https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes({collection})"
+
+    session = Credentials.make_session(None, False, Credentials.RETRIES, proxies)
+
+    try:
+        response = session.get(url, timeout=30)
+        if response.status_code == 404:
+            raise ValueError(f"Collection '{collection}' not found")
+        if response.status_code != 200:
+            raise ValueError(
+                f"Failed to fetch attributes for '{collection}': "
+                f"HTTP {response.status_code}"
+            )
+        return response.json()
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"Error fetching attributes for '{collection}': {e}") from e
+
+
 def describe_collection(
     collection: str, proxies: Union[Dict[str, str], None] = None
 ) -> Dict[str, Any]:
     """
-    Get a list of valid OData filter parameters for a given collection
+    Get available OData filter parameters for a given collection.
 
-    Note: This is a simplified version that returns common parameters.
-    The OData API does not provide a schema description endpoint like OpenSearch did.
+    Fetches available attributes from the OData API's Attributes endpoint and
+    categorizes them into supported (can be used in filters) and available
+    (exist on server but not yet supported by CDSETool's filter implementation).
+
+    Args:
+        collection: Collection name (e.g., "SENTINEL-2", "SENTINEL-1")
+        proxies: Optional proxy configuration
+
+    Returns:
+        Dictionary with two keys:
+        - "supported": Parameters that CDSETool can filter on
+        - "available": Server attributes not yet supported by filter implementation
     """
-    # Common parameters across all collections
-    common_params = {
-        "startDate": {
-            "title": "Start date for acquisition (ContentDate/Start gt)",
-            "example": "2024-01-01 or 2024-01-01T00:00:00Z",
-        },
-        "startDateBefore": {
-            "title": "Upper bound for start date (ContentDate/Start lt)",
-            "example": "2024-01-31 or 2024-01-31T23:59:59Z",
-        },
-        "completionDate": {
-            "title": "End date for acquisition (ContentDate/End lt)",
-            "example": "2024-01-31 or 2024-01-31T23:59:59Z",
-        },
-        "geometry": {
-            "title": "WKT geometry for spatial filtering",
-            "example": "POLYGON((lon1 lat1, lon2 lat2, ...))",
-        },
-        "productType": {
-            "title": "Product type (e.g., S2MSI1C, S2MSI2A, GRD, SLC)",
-        },
-        "orbitDirection": {
-            "title": "Orbit direction (ASCENDING or DESCENDING)",
-        },
-        "relativeOrbitNumber": {
-            "title": "Relative orbit number",
-        },
-    }
+    # Start with built-in supported parameters
+    supported: Dict[str, Any] = _BUILTIN_PARAMS.copy()
 
-    # Collection-specific parameters
-    collection_params = {
-        "SENTINEL-2": {
-            "cloudCover": {
-                "title": "Maximum cloud cover percentage (0-100)",
-                "maxInclusive": "100",
-                "minInclusive": "0",
-            },
-        },
-    }
+    # Available attributes from server that aren't supported yet
+    available: Dict[str, Any] = {}
 
-    params = common_params.copy()
-    if collection.upper() in collection_params:
-        params.update(collection_params[collection.upper()])
+    # Fetch dynamic attributes from the API
+    try:
+        server_attributes = _fetch_collection_attributes(collection, proxies)
 
-    return params
+        for attr in server_attributes:
+            name = attr.get("Name")
+            value_type = attr.get("ValueType", "String")
+
+            if not name:
+                continue
+
+            if name in _SUPPORTED_ATTRIBUTES:
+                # This attribute is supported by our filter implementation
+                supported[name] = _SUPPORTED_ATTRIBUTES[name].copy()
+            else:
+                # Server has this attribute but we don't support filtering on it yet
+                available[name] = {"type": value_type}
+
+    except ValueError:
+        # If API call fails, just add supported attributes without server validation
+        supported.update(_SUPPORTED_ATTRIBUTES)
+
+    return {"supported": supported, "available": available}
 
 
 @dataclass(frozen=True)

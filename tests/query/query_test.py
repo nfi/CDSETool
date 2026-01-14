@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Any
 
 import pytest
 
@@ -6,7 +7,9 @@ from cdsetool.query import (
     _build_attribute_filter,
     _build_attribute_range_filter,
     _build_odata_filter,
+    _fetch_collection_attributes,
     _format_odata_date,
+    describe_collection,
     geojson_to_wkt,
     shape_to_wkt,
 )
@@ -122,3 +125,110 @@ def test_geojson_to_wkt() -> None:
     geojson = '{"type":"FeatureCollection","features":[{"type":"Feature","properties":{ },"geometry":{"coordinates":[[[17.58127378553624,59.88489715357605],[17.58127378553624,59.80687027682205],[17.73996723627809,59.80687027682205],[17.73996723627809,59.88489715357605],[17.58127378553624,59.88489715357605]]],"type":"Polygon" } } ] }'
 
     assert geojson_to_wkt(geojson) == wkt
+
+
+def _mock_sentinel_1_attributes(requests_mock: Any) -> None:
+    """Mock the Attributes endpoint for SENTINEL-1"""
+    with open(
+        "tests/query/mock/sentinel_1/attributes.json", "r", encoding="utf-8"
+    ) as f:
+        requests_mock.get(
+            "https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(SENTINEL-1)",
+            text=f.read(),
+        )
+
+
+def test_fetch_collection_attributes(requests_mock: Any) -> None:
+    """Test fetching attributes from OData API"""
+    _mock_sentinel_1_attributes(requests_mock)
+
+    attrs = _fetch_collection_attributes("SENTINEL-1")
+
+    # Check we got the expected attributes
+    attr_names = [a["Name"] for a in attrs]
+    assert "productType" in attr_names
+    assert "orbitNumber" in attr_names
+    assert "relativeOrbitNumber" in attr_names
+
+    # Check types are returned
+    product_type = next(a for a in attrs if a["Name"] == "productType")
+    assert product_type["ValueType"] == "String"
+
+    orbit_number = next(a for a in attrs if a["Name"] == "orbitNumber")
+    assert orbit_number["ValueType"] == "Integer"
+
+
+def test_fetch_collection_attributes_not_found(requests_mock: Any) -> None:
+    """Test fetching attributes for non-existent collection"""
+    requests_mock.get(
+        "https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(INVALID)",
+        status_code=404,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        _fetch_collection_attributes("INVALID")
+
+    assert "not found" in str(exc_info.value)
+
+
+def test_describe_collection_separates_supported_and_available(
+    requests_mock: Any,
+) -> None:
+    """Test that describe_collection separates supported and available attributes"""
+    _mock_sentinel_1_attributes(requests_mock)
+
+    result = describe_collection("SENTINEL-1")
+
+    # Check structure
+    assert "supported" in result
+    assert "available" in result
+
+    supported = result["supported"]
+    available = result["available"]
+
+    # Built-in params should be in supported
+    assert "startDate" in supported
+    assert "completionDate" in supported
+    assert "geometry" in supported
+
+    # Supported attributes from API should be in supported
+    assert "productType" in supported
+    assert "orbitDirection" in supported
+    assert "relativeOrbitNumber" in supported
+    assert "orbitNumber" in supported
+
+    # Non-supported attributes from API should be in available
+    assert "datatakeID" in available
+    assert "cycleNumber" in available
+    assert "sliceNumber" in available
+    assert "processorName" in available
+
+    # Available attributes should have type info (compact format)
+    assert available["datatakeID"] == {"type": "Integer"}
+    assert available["cycleNumber"] == {"type": "Integer"}
+    assert available["processorName"] == {"type": "String"}
+
+
+def test_describe_collection_api_failure_fallback(requests_mock: Any) -> None:
+    """Test that describe_collection falls back gracefully when API fails"""
+    requests_mock.get(
+        "https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(SENTINEL-2)",
+        status_code=500,
+    )
+
+    result = describe_collection("SENTINEL-2")
+
+    # Should still return supported attributes
+    assert "supported" in result
+    assert "available" in result
+
+    # Built-in params should be present
+    assert "startDate" in result["supported"]
+    assert "geometry" in result["supported"]
+
+    # Supported attributes should be added as fallback
+    assert "productType" in result["supported"]
+    assert "cloudCover" in result["supported"]
+
+    # Available should be empty since we couldn't fetch from server
+    assert result["available"] == {}
