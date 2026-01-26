@@ -31,8 +31,6 @@ def query_search_terms(collection: str) -> None:
         print(f"  - {key}")
         if attributes.get("title"):
             print(f"    - Description: {attributes.get('title')}")
-        if attributes.get("pattern"):
-            print(f"    - Pattern: {attributes.get('pattern')}")
         if attributes.get("example"):
             print(f"      Example: {attributes.get('example')}")
         if attributes.get("minInclusive"):
