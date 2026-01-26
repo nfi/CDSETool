@@ -257,17 +257,14 @@ def describe_collection(
     common_params = {
         "startDate": {
             "title": "Start date for acquisition (ContentDate/Start gt)",
-            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
             "example": "2024-01-01 or 2024-01-01T00:00:00Z",
         },
         "startDateBefore": {
             "title": "Upper bound for start date (ContentDate/Start lt)",
-            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
             "example": "2024-01-31 or 2024-01-31T23:59:59Z",
         },
         "completionDate": {
             "title": "End date for acquisition (ContentDate/End lt)",
-            "pattern": r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})?)?$",
             "example": "2024-01-31 or 2024-01-31T23:59:59Z",
         },
         "geometry": {
