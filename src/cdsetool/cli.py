@@ -3,6 +3,7 @@ Command line interface
 """
 
 import json as JSON
+import logging
 import os
 import sys
 from typing import Annotated, Any, Dict, List, Optional
@@ -33,11 +34,17 @@ def main_callback(
         bool,
         typer.Option("--verbose", "-v", help="Enable logging of warnings and errors"),
     ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option("--debug", "-d", help="Enable debug logging"),
+    ] = False,
 ) -> None:
     """
     CDSETool - Copernicus Data Space Ecosystem Tool
     """
-    if verbose:
+    if debug:
+        _app_state["logger"] = ConsoleLogger(level=logging.DEBUG)
+    elif verbose:
         _app_state["logger"] = ConsoleLogger()
 
 
