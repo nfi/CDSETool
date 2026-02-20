@@ -5,11 +5,12 @@ Command line interface
 import json as JSON
 import os
 import sys
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import typer
 
 from cdsetool.download import download_features
+from cdsetool.logger import ConsoleLogger
 from cdsetool.monitor import StatusMonitor
 from cdsetool.query import (
     SearchTermValue,
@@ -22,6 +23,22 @@ app = typer.Typer(no_args_is_help=True)
 
 query_app = typer.Typer(no_args_is_help=True)
 app.add_typer(query_app, name="query")
+
+_app_state: Dict[str, Any] = {}
+
+
+@app.callback()
+def main_callback(
+    verbose: Annotated[
+        bool,
+        typer.Option("--verbose", "-v", help="Enable logging of warnings and errors"),
+    ] = False,
+) -> None:
+    """
+    CDSETool - Copernicus Data Space Ecosystem Tool
+    """
+    if verbose:
+        _app_state["logger"] = ConsoleLogger()
 
 
 def _format_attributes(attributes: Dict[str, Dict[str, str]]) -> str:
@@ -85,7 +102,11 @@ def query_search(
     Search for features matching the search terms
     """
     search_term = search_term or []
-    features = query_features(collection, _to_dict(search_term))
+    features = query_features(
+        collection,
+        _to_dict(search_term),
+        options={"logger": _app_state.get("logger")},
+    )
 
     for feature in features:
         if json:
@@ -130,7 +151,11 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
         sys.exit(1)
 
     search_term = search_term or []
-    features = query_features(collection, _to_dict(search_term))
+    features = query_features(
+        collection,
+        _to_dict(search_term),
+        options={"logger": _app_state.get("logger")},
+    )
 
     list(
         download_features(
@@ -138,6 +163,7 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
             path,
             {
                 "monitor": StatusMonitor(),
+                "logger": _app_state.get("logger"),
                 "concurrency": concurrency,
                 "overwrite_existing": overwrite_existing,
                 "filter_pattern": filter_pattern,
