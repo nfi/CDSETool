@@ -225,9 +225,10 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
             None, False, Credentials.RETRIES, self.proxies
         )
         attempts = 0
-        while attempts < 10 and self.next_url is not None:
+        while attempts < 10:
             attempts += 1
             try:
+                assert self.next_url is not None  # for type checker
                 with session.get(self.next_url) as response:
                     if response.status_code != 200:
                         self.log.warning(
