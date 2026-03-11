@@ -2,8 +2,6 @@
 
 from typing import Any
 
-import pytest
-
 from cdsetool.query import (
     _build_attribute_filter,
     _build_odata_filter,
@@ -266,13 +264,9 @@ def test_fetch_collection_attributes_not_found(requests_mock: Any) -> None:
     """Test fetching attributes for non-existent collection"""
     requests_mock.get(
         "https://catalogue.dataspace.copernicus.eu/odata/v1/Attributes(INVALID)",
-        status_code=404,
+        status_code=400,
     )
-
-    with pytest.raises(ValueError) as exc_info:
-        _fetch_collection_attributes("INVALID")
-
-    assert "not found" in str(exc_info.value)
+    assert _fetch_collection_attributes("INVALID") is None
 
 
 def test_describe_collection_returns_all_server_attrs_as_supported(
