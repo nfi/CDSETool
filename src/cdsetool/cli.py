@@ -3,6 +3,7 @@ Command line interface
 """
 
 import json as JSON
+import logging
 import os
 import sys
 from typing import Annotated, Dict, List, Optional
@@ -10,6 +11,7 @@ from typing import Annotated, Dict, List, Optional
 import typer
 
 from cdsetool.download import download_features
+from cdsetool.logger import ConsoleLogger
 from cdsetool.monitor import StatusMonitor
 from cdsetool.query import (
     SearchTermValue,
@@ -22,6 +24,28 @@ app = typer.Typer(no_args_is_help=True)
 
 query_app = typer.Typer(no_args_is_help=True)
 app.add_typer(query_app, name="query")
+
+
+@app.callback()
+def main_callback(
+    ctx: typer.Context,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="Increase verbosity: -v warnings/errors, -vv info, -vvv debug",
+        ),
+    ] = 0,
+) -> None:
+    """
+    CDSETool - Copernicus Data Space Ecosystem Tool
+    """
+    ctx.obj = {}
+    if verbose >= 1:
+        level = {1: logging.WARNING, 2: logging.INFO}.get(verbose, logging.DEBUG)
+        ctx.obj["logger"] = ConsoleLogger(level=level)
 
 
 def _format_attributes(attributes: Dict[str, Dict[str, str]]) -> str:
@@ -71,6 +95,7 @@ def query_search_terms(
 # TODO: implement limit
 @query_app.command("search")
 def query_search(
+    ctx: typer.Context,
     collection: str,
     search_term: Annotated[
         Optional[List[str]],
@@ -86,7 +111,9 @@ def query_search(
     """
     search_term = search_term or []
     features = query_features(
-        collection, _to_dict(search_term), options={"max_attempts": 1}
+        collection,
+        _to_dict(search_term),
+        options={"logger": ctx.obj.get("logger"), "max_attempts": 1},
     )
 
     for feature in features:
@@ -99,6 +126,7 @@ def query_search(
 # TODO: implement limit
 @app.command("download")
 def download(  # pylint: disable=[too-many-arguments, too-many-positional-arguments]
+    ctx: typer.Context,
     collection: str,
     path: str,
     concurrency: Annotated[
@@ -131,9 +159,10 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
         print(f"Path {path} does not exist")
         sys.exit(1)
 
+    logger = ctx.obj.get("logger")
     search_term = search_term or []
     features = query_features(
-        collection, _to_dict(search_term), options={"max_attempts": 1}
+        collection, _to_dict(search_term), options={"logger": logger, "max_attempts": 1}
     )
 
     results = list(
@@ -142,6 +171,7 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
             path,
             {
                 "monitor": StatusMonitor(),
+                "logger": logger,
                 "concurrency": concurrency,
                 "overwrite_existing": overwrite_existing,
                 "filter_pattern": filter_pattern,
