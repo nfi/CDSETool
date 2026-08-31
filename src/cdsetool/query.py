@@ -170,6 +170,7 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
         self.proxies = proxies
         self._max_attempts = opts.get("max_attempts", 10)
         self.log = opts.get("logger") or NoopLogger()
+        self._credentials: Optional[Credentials] = opts.get("credentials")
         self.collection = collection
         self.search_terms = search_terms
         # Option to expand Attributes for product metadata (default: False)
@@ -223,12 +224,17 @@ class FeatureQuery:  # pylint: disable=too-many-instance-attributes
     def __fetch_features(self) -> None:
         if self.next_url is None:
             return
-        session = Credentials.make_session(
-            None, False, Credentials.RETRIES, self.proxies
-        )
         attempts = 0
         while attempts < self._max_attempts:
             attempts += 1
+            # Always get a new session, credentials might have expired.
+            session = (
+                self._credentials.get_session()
+                if self._credentials
+                else Credentials.make_session(
+                    None, False, Credentials.RETRIES, self.proxies
+                )
+            )
             try:
                 assert self.next_url is not None  # for type checker
                 with session.get(self.next_url) as response:

@@ -3,6 +3,8 @@
 import json
 from typing import Any
 
+import requests
+
 from cdsetool.query import _strip_odata_count, query_features
 
 
@@ -96,3 +98,38 @@ def test_query_features_random_access(requests_mock: Any) -> None:
         == "S1A_OPER_AUX_PROQUA_POD__20210408T165229_V20140409T235944_20140410T235943"
     )
     assert len(query.features) == 40
+
+
+class _FakeCredentials:
+    """Stands in for Credentials, which contacts the IAM endpoint on init."""
+
+    def get_session(self) -> requests.Session:
+        session = requests.Session()
+        session.headers.update({"Authorization": "Bearer test-token"})
+        return session
+
+
+def test_query_features_authenticated(requests_mock: Any) -> None:
+    """The credentials option adds an Authorization header to catalogue requests"""
+    _mock_sentinel_1(requests_mock)
+
+    query = query_features(
+        "SENTINEL-1",
+        {"top": 10},
+        options={"expand_attributes": True, "credentials": _FakeCredentials()},
+    )
+
+    assert len(query) == 47
+    assert requests_mock.last_request.headers["Authorization"] == "Bearer test-token"
+
+
+def test_query_features_anonymous_by_default(requests_mock: Any) -> None:
+    """Without the credentials option, no Authorization header is sent"""
+    _mock_sentinel_1(requests_mock)
+
+    query = query_features(
+        "SENTINEL-1", {"top": 10}, options={"expand_attributes": True}
+    )
+
+    assert len(query) == 47
+    assert "Authorization" not in requests_mock.last_request.headers

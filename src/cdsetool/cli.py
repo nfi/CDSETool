@@ -5,10 +5,11 @@ Command line interface
 import json as JSON
 import os
 import sys
-from typing import Annotated, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import typer
 
+from cdsetool.credentials import Credentials
 from cdsetool.download import download_features
 from cdsetool.monitor import StatusMonitor
 from cdsetool.query import (
@@ -80,14 +81,22 @@ def query_search(
         ),
     ] = None,
     json: Annotated[bool, typer.Option(help="Output JSON")] = False,
+    auth: Annotated[
+        bool,
+        typer.Option(
+            help="Authenticate the query using your CDSE credentials (~/.netrc). "
+            + "Required for access-restricted products, e.g. Sentinel-2 L1B"
+        ),
+    ] = False,
 ) -> None:
     """
     Search for features matching the search terms
     """
     search_term = search_term or []
-    features = query_features(
-        collection, _to_dict(search_term), options={"max_attempts": 1}
-    )
+    options: Dict[str, Any] = {"max_attempts": 1}
+    if auth:
+        options["credentials"] = Credentials()
+    features = query_features(collection, _to_dict(search_term), options=options)
 
     for feature in features:
         if json:
@@ -132,8 +141,11 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
         sys.exit(1)
 
     search_term = search_term or []
+    credentials = Credentials()
     features = query_features(
-        collection, _to_dict(search_term), options={"max_attempts": 1}
+        collection,
+        _to_dict(search_term),
+        options={"max_attempts": 1, "credentials": credentials},
     )
 
     results = list(
@@ -141,6 +153,7 @@ def download(  # pylint: disable=[too-many-arguments, too-many-positional-argume
             features,
             path,
             {
+                "credentials": credentials,
                 "monitor": StatusMonitor(),
                 "concurrency": concurrency,
                 "overwrite_existing": overwrite_existing,

@@ -57,6 +57,7 @@ cdsetool download SENTINEL-2 PATH/TO/DIR --concurrency 4 --search-term contentDa
       - [Querying by lists of parameters](#querying-by-lists-of-parameters)
       - [Querying by dates](#querying-by-dates)
       - [Listing search terms](#listing-search-terms)
+      - [Querying access-restricted products](#querying-access-restricted-products)
     + [Downloading features](#downloading-features)
       - [Authenticating](#authenticating)
       - [Concurrently downloading features](#concurrently-downloading-features)
@@ -246,6 +247,36 @@ And the CLI:
 ```bash
 $ cdsetool query search-terms SENTINEL-2
 ```
+
+#### Querying access-restricted products
+
+Some products are only listed for authorized accounts. For example, Sentinel-2 L1B
+products (product types `MSI_L1B_GR` for granules and `MSI_L1B_DS` for datastrips)
+are only visible to expert users, and anonymous queries return no results for them.
+Note that the `S2MSI1B` product type mentioned in the CDSE documentation matches
+nothing; use `MSI_L1B_GR` / `MSI_L1B_DS` instead.
+
+To authenticate a query, pass a `Credentials` instance
+(see [Authenticating](#authenticating)) in the options:
+
+```python
+from cdsetool.credentials import Credentials
+from cdsetool.query import query_features
+
+features = query_features(
+    "SENTINEL-2",
+    {"productType": "MSI_L1B_GR"},
+    options={"credentials": Credentials()},
+)
+```
+
+Or use the CLI with the `--auth` flag:
+
+```bash
+cdsetool query search SENTINEL-2 --search-term productType=MSI_L1B_GR --auth
+```
+
+The `download` command always queries with authentication.
 
 ### Downloading features
 
